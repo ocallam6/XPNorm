@@ -1,0 +1,17 @@
+name: astro
+channels:
+  - conda-forge
+dependencies:
+  - python=3.8
+  - torchvision
+  - ipykernel
+  - plotly=5.9.0
+  - ipywidgets[version='>=7.6']
+  - jupyterlab[version='>=3']
+  - jupyter-dash
+  - git
+  - hdf5
+  - healpy
+  - pip
+  - gfortran
+prefix: /opt/homebrew/Caskroom/miniforge/base/envs/astro
