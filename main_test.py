@@ -13,9 +13,9 @@ import matplotlib.pyplot as plt
 from dustmaps.bayestar import BayestarQuery
 from functorch import jacfwd
 from itertools import combinations
-
+from src.Extinction_map import Extinction_Trainer,Extinction_Map,BNN_Extinction
 #from src.Bayesian_NN_nodist import BayesianExtinction_Trainer
-from src.Bayesian_NN_nodist import BayesianExtinction_Trainer
+from src.Bayesian_NN_pos import BayesianExtinction_Trainer
 
 
 
@@ -33,15 +33,17 @@ from pyro.nn import PyroModule, PyroSample
 import torch.nn as nn
 
 
-from src import Normalising_Flow_nodist
+from src import Normalising_Flow_nodist,Normalising_Flow_Extinction
 if __name__=="__main__":
 
-    #nf=Normalising_Flow_nodist.Normalising_Flow_Trainer()
-    #nf.train()
+    nf=Normalising_Flow_Extinction.Normalising_Flow_Trainer()
+    print(nf.data.shape)
+    nf.load()
 
     nf=BayesianExtinction_Trainer()
-    nf.train()
     #nf.train()
+    nf.load()
+    #nf.load()
 
    # Define Galactic coordinates (l, b) in degrees
     l = 104.2  # Galactic longitude in degrees
@@ -59,17 +61,21 @@ if __name__=="__main__":
 # Initialize empty lists to store distance and EBV arrays
     all_distances = []
     all_ebv = []
-    distance = 10 ** (((torch.tensor(nf.data_test[:len(nf.data_test)//32, 0:1])).detach().numpy() + nf.dist_mean + 5) / 5)
+    distance = 10 ** (((torch.tensor(nf.data_test[:len(nf.data_test)//5, 2:3])).detach().numpy()*nf.dist_std[-1] + nf.dist_mean[-1] + 5) / 5)
+    l = torch.tensor(nf.data_test[:len(nf.data_test)//5, 0:1]).detach().numpy()*nf.dist_std[0] + nf.dist_mean[0]
+    b = torch.tensor(nf.data_test[:len(nf.data_test)//5, 1:2]).detach().numpy()*nf.dist_std[1] + nf.dist_mean[1]
+    
+
+
     idx=distance[:,0].argsort()
     #distance=np.arange(0.1,5000,1)[:,None]
     #distance_in=2.5*np.log10(distance**2/100)-nf.dist_mean
     # Run the loop 100 times and collect distance and EBV arrays
-    for i in range(8000):
-        ebv = (nf.model(torch.tensor(nf.data_test[:len(nf.data_test)//32, 0:1])).detach().numpy())
-        if((np.gradient(ebv[idx][:,0])<0).sum()==0):
+    for i in range(500):
+        ebv = (nf.model(torch.tensor(nf.data_test[:len(nf.data_test)//5, 0:3])).detach().numpy())
         # this is an extinction assumption
-            all_distances.append(distance)
-            all_ebv.append(ebv/3.1)
+        all_distances.append(distance)
+        all_ebv.append(ebv/3.1)
 
         # Convert lists to numpy arrays
     # Convert arrays to numpy arrays
@@ -84,56 +90,74 @@ if __name__=="__main__":
     
 
     # Create DataFrame
-    data = pd.DataFrame(np.stack([(distance[:, 0]), mean_ebv[:, 0], std_ebv[:, 0]], axis=1),
-                        columns=['Distance', 'MeanAv', 'STDAv'])
+    data = pd.DataFrame(np.stack([b[:,0],l[:,0],(distance[:, 0]), mean_ebv[:, 0], std_ebv[:, 0]], axis=1),
+                        columns=['b','l','Distance', 'MeanAv', 'STDAv'])
     data = data.sort_values(by='Distance', ascending=True)
+    #data=data[data['Distance']>900]
+    
+    l_c=104.08
+    b_c=22.31
+    data1=data[(data['l']-l_c)**2+(data['b']-b_c)**2<=0.160**2]
+    #data=data[(data['l']-l_c)**2+(data['b']-b_c)**2<0.16**2]
+    l_c=103.90
+    b_c=21.97
+    data2=data[(data['l']-l_c)**2+(data['b']-b_c)**2<=0.160**2]
+    
 
     # Create figure and axes for subplots
-    fig, axes = plt.subplots(1, 1, figsize=(8, 3))
-    axes=[axes]
+    fig, axes = plt.subplots(2, 1, figsize=(8, 6))
+
     # Plot the first subplot (original data)
-    sn.lineplot(data=data, x='Distance', y='MeanAv', label='Mean $E(B-V)$', ax=axes[0])
-    sn.scatterplot(data=data, x='Distance', y='MeanAv', ax=axes[0],s=0.001)
+    #sn.lineplot(data=data, x='Distance', y='MeanAv', label='Mean $A_V$', ax=axes[0])
+    sn.scatterplot(data=data, x='l', y='b', ax=axes[0],s=10,hue='MeanAv',palette='magma')
 
     # Plot thick green vertical lines at each point
     points = [(346, 393), (1250, 2140)]
-    for point in points:
-        axes[0].axvline(x=point[0], color='green', linewidth=1)
-        axes[0].axvline(x=point[1], color='green', linewidth=1)
+    #for point in points:
+     #   axes[0].axvline(x=point[0], color='green', linewidth=1)
+      #  axes[0].axvline(x=point[1], color='green', linewidth=1)
 
     # Calculate upper and lower bounds
     upper_bound = data['MeanAv'] + data['STDAv']
     lower_bound = data['MeanAv'] - data['STDAv']
 
     # Fill between upper and lower bounds
-    axes[0].fill_between(data['Distance'], lower_bound, upper_bound, alpha=0.3, label='$\pm \sigma$')
-    axes[0].set_xlim(0,4000)
+    #axes[0].fill_between(data['Distance'], lower_bound, upper_bound, alpha=0.3, label='$\pm \sigma$')
+    #axes[0].set_xlim(0,4000)
     # Add labels and legend to the first subplot
-    axes[0].set_xlabel('Distance')
-    axes[0].set_ylabel('$E(B-V)$')
-    axes[0].legend()
-    plt.tight_layout()
-    plt.show()
-'''
-    # Plot the second subplot (zoomed)
-    sn.lineplot(data=data, x='Distance', y='MeanAv', label='Mean $A_V$', ax=axes[1])
-    sn.scatterplot(data=data, x='Distance', y='MeanAv', ax=axes[1],s=0.001)
+    #axes[0].set_xlabel('Distance')
+    #axes[0].set_ylabel('$E(B-V)$')
+    #axes[0].legend()
 
-    # Plot thick green vertical lines at each point
+    # Plot the second subplot (zoomed)
+    #sn.lineplot(data=data, x='Distance', y='MeanAv', label='Mean $A_V$', ax=axes[1])
+    sn.scatterplot(data=data1, x='Distance', y='MeanAv', ax=axes[1])
+    sn.scatterplot(data=data2, x='Distance', y='MeanAv', ax=axes[1])
     for point in points:
         axes[1].axvline(x=point[0], color='green', linewidth=3)
         axes[1].axvline(x=point[1], color='green', linewidth=3)
 
+    for point in points:
+        axes[0].axvline(x=point[0], color='green', linewidth=3)
+        axes[0].axvline(x=point[1], color='green', linewidth=3)
+
+    # Plot thick green vertical lines at each point
+
+
     # Calculate upper and lower bounds for the zoomed plot
-    upper_bound_zoomed = upper_bound[data['Distance'] <= 600]
-    lower_bound_zoomed = lower_bound[data['Distance'] >= 100]
+    upper_bound = data2['MeanAv'] + data2['STDAv']
+    lower_bound = data2['MeanAv'] - data2['STDAv']
 
     # Fill between upper and lower bounds for the zoomed plot
-    axes[1].fill_between(data['Distance'], lower_bound, upper_bound, alpha=0.3, label='$\pm \sigma$')
+    axes[1].fill_between(data2['Distance'], lower_bound, upper_bound, alpha=0.3, label='$\pm \sigma$')
+    upper_bound = data1['MeanAv'] + data1['STDAv']
+    lower_bound = data1['MeanAv'] - data1['STDAv']
+
+    axes[0].fill_between(data1['Distance'], lower_bound, upper_bound, alpha=0.3, label='$\pm \sigma$')
 
     # Set the limits for the zoomed plot
-    axes[1].set_xlim(1000, 2000)
-    axes[1].set_ylim(axes[0].get_ylim())
+    #axes[0].set_xlim(105, 103)
+    axes[1].set_ylim(axes[1].get_ylim())
 
     # Add labels and legend to the second subplot
     axes[1].set_xlabel('Distance')
@@ -155,7 +179,7 @@ if __name__=="__main__":
     
 
  
-
+    '''
     planck = BayestarQuery()
     ebv = planck(galactic_coord,mode='samples')
     

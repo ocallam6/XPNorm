@@ -4,7 +4,7 @@ import normflows as nf
 from matplotlib import pyplot as plt
 from tqdm import tqdm
 import torch.optim as optim
-import dask.dataframe as dd
+
 import pandas as pd
 import os
 import matplotlib.pyplot as plt
@@ -103,7 +103,9 @@ class Normalising_Flow_Trainer():
             self.data=np.einsum('ij,bj->bi',np.array(self.data_transform),np.array(self.data))
 
             self.data=self.data[(self.data[:,1]<10)*(self.data[:,1]>-2)]
-            self.data=self.data[(self.data[:,0]<14)*(self.data[:,0]>4)]
+            self.data=self.data[(self.data[:,0]<20)*(self.data[:,0]>2)]
+
+            self.data=self.data[:,1:]
             self.mean=np.mean(self.data,axis=0)
             self.std=np.std(self.data,axis=0)
             self.data=(self.data-self.mean)
@@ -249,15 +251,15 @@ class Normalising_Flow_Trainer():
             if(avg_loss<running_loss_best):
                 print('save')
                 running_loss_best=avg_loss        
-                torch.save(self.nfm.state_dict(), '/Users/mattocallaghan/XPNorm/Data/north_south_nf_original')
-                #torch.save(self.nfm.state_dict(), '/Users/mattocallaghan/XPNorm/Data/north_south_nf_nodistance')
+                #torch.save(self.nfm.state_dict(), '/Users/mattocallaghan/XPNorm/Data/north_south_nf_original')
+                torch.save(self.nfm.state_dict(), '/Users/mattocallaghan/XPNorm/Data/north_south_nf_nodistance')
 
         self.nfm.eval()
 
     def load(self):
 
-        #self.nfm.load_state_dict(torch.load('/Users/mattocallaghan/XPNorm/Data/north_south_nf_nodistance'))
-        self.nfm.load_state_dict(torch.load('/Users/mattocallaghan/XPNorm/Data/north_south_nf_infer'))
+        self.nfm.load_state_dict(torch.load('/Users/mattocallaghan/XPNorm/Data/north_south_nf_nodistance'))
+        #self.nfm.load_state_dict(torch.load('/Users/mattocallaghan/XPNorm/Data/north_south_nf_infer'))
 
         self.nfm.eval()
     def sample(self,num_samples):

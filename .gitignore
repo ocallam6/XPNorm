@@ -8,3 +8,4 @@ output/
 docs/
 !*Doxyfile
 /Data
+/Plots
