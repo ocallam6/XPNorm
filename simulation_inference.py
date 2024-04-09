@@ -12,7 +12,7 @@ nf.load()
 
 
 num_dim = 1
-prior = utils.BoxUniform(low=-1 * torch.ones(num_dim), high=1 * torch.ones(num_dim))
+prior = utils.BoxUniform(low=-0.05 * torch.ones(num_dim), high=1 * torch.ones(num_dim))
 coeffs= torch.tensor(np.array([
         [0.194059063720102, -0.000337880688254366, 0.000405004510990789, -0.000119030825664077, -2.90629429374213e-05, 9.85596051245887e-09, 1.22296149043372e-10, 0, 0, 0],
         [0.255058871064972, 7.19016588950228e-05, -0.000250455702483274, 3.99422163967702e-05, -6.83632867675118e-05, -2.3163568526324e-09, 7.26631781961228e-10, -2.27788077229475e-07, 4.97609167483581e-07, 6.67076034469308e-09],
@@ -49,21 +49,21 @@ def simulator(ebv):
 
     extinction_vector=torch.tensor(torch.einsum('ij,bj->bi',torch.tensor(nf.data_transform[1:,1:]),extinction_vector))
 
-    return x[:,:]+torch.tensor(extinction_vector*ebv)
+    return (x[:,:]+torch.tensor(extinction_vector*ebv))[0,:]
 
-#posterior = infer(simulator, prior, method="SNPE", num_simulations=10000)
+#posterior = infer(simulator, prior, method="SNPE", num_simulations=50000)
 
 
 import pickle
 
 
 
-#with open('filename.pickle', 'wb') as handle:
+#with open('final_posterior.pickle', 'wb') as handle:
 #    pickle.dump(posterior, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
 #with open('posterior.pickle', 'rb') as handle:
 #    posterior = pickle.load(handle)
-with open('filename.pickle', 'rb') as handle:
+with open('final_posterior.pickle', 'rb') as handle:
     posterior = pickle.load(handle)
 
 data_file='/Users/mattocallaghan/XPNorm/Data/data_full'
@@ -74,7 +74,7 @@ test_file='/Users/mattocallaghan/XPNorm/Data/data_black_circle'
 
 #test_file='/Users/mattocallaghan/XPNorm/Data/data_red_circle'
 #test_file='/Users/mattocallaghan/XPNorm/Data/data_black_circle_20'
-#test_file='/Users/mattocallaghan/XPNorm/Data/data_noext'
+#test_file='/Users/mattocallaghan/XPNorm/Data/data_full'
 
 err_file='/Users/mattocallaghan/XPNorm/Data/err'
 
@@ -129,14 +129,16 @@ for i in range(len(data_test)//32):
     samples = posterior.sample((10000,), x=observation[None,:])
     ext.append(samples.mean())
     stds.append(samples.std())
-
+print(np.array(stds).mean()/3.1)
+print(np.array(stds).max()/3.1)
+print(np.array(stds).min()/3.1)
 distance=10**((data_test[:len(data_test)//32,0]+5)/5)
 ebv_mean=np.array(ext)
 ebv_std = np.sqrt(stds)
 
 # Create scatter plot
-#plt.errorbar(distance, ebv_mean/3.1, yerr=ebv_std/3.1, fmt='o', markersize=3, capsize=3)
-plt.scatter(distance, ebv_mean/3.1)
+plt.errorbar(distance, ebv_mean/3.1, yerr=ebv_std/3.1, fmt='o', markersize=3, capsize=3)
+plt.scatter(distance, ebv_mean/3.1,c='r')
 
 plt.xlabel('Distance Mean')
 plt.xlim(0,2000)

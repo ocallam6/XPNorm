@@ -50,7 +50,7 @@ class Data_Generation():
         #self.places=[[294.46007047, 72.23165519]] #pasiphae black circle small
 
         #self.places=[[191.2318,57.1060]]
-        self.places=[[191.2318,45.1060]]
+        #self.places=[[191.2318,45.1060]]
         
 
         self.bprp=False
@@ -63,8 +63,8 @@ class Data_Generation():
 
         self.bp_rp_data()
 
-        self.data.to_csv('/Users/mattocallaghan/XPNorm/Data/zero_bayestar')
-        self.err.to_csv('/Users/mattocallaghan/XPNorm/Data/err')
+        self.data.to_csv('/Users/mattocallaghan/XPNorm/Data/data_full_1')
+        self.err.to_csv('/Users/mattocallaghan/XPNorm/Data/err_full_1')
 
 
 
@@ -91,7 +91,7 @@ class Data_Generation():
                         #job = Gaia.launch_job_async( "select top 100 * from gaiadr2.gaia_source where parallax>0 and parallax_over_error>3. ") # Select `good' parallaxes
             qry = "SELECT * \
             FROM gaiadr3.gaia_source AS g, gaiaedr3_distance as d \
-            WHERE DISTANCE(%f, %f, g.ra, g.dec) < 0.2\
+            WHERE DISTANCE(%f, %f, g.ra, g.dec) < 0.6\
             AND g.source_id = d.source_id;" % (x, y)
             job = Gaia.launch_job_async( qry )
             tblGaia = job.get_results()       #Astropy table
@@ -166,6 +166,9 @@ class Data_Generation():
         final_bprp=final_bprp[final_bprp['ruwe']<1.4].reset_index(drop=True)
         final_bprp=final_bprp[final_bprp['phot_bp_mean_mag']<22].reset_index(drop=True)
         final_bprp=final_bprp[final_bprp['phot_rp_mean_mag']<22].reset_index(drop=True)
+        final_bprp=final_bprp[final_bprp['phot_g_mean_mag']<18].reset_index(drop=True)
+        final_bprp=final_bprp[final_bprp['phot_bp_mean_mag']<18].reset_index(drop=True) #check lallement et al
+
         zpt.load_tables()
         final_bprp['zero_point']=final_bprp.apply(zpt.zpt_wrapper,axis=1)
 
@@ -198,6 +201,9 @@ class Data_Generation():
             final_bprp=final_bprp[(final_bprp['parallax_error']/final_bprp['parallax'])<0.2]
 
             final_bprp=final_bprp[final_bprp['ks_msigcom']<final_bprp['ks_msigcom'].mean()+3*final_bprp['ks_msigcom'].std()]
+            final_bprp=final_bprp[final_bprp['ks_msigcom']<0.05]
+            final_bprp=final_bprp[final_bprp['h_msigcom']<0.05]
+            final_bprp=final_bprp[final_bprp['j_msigcom']<0.05]
             final_bprp=final_bprp[final_bprp['h_msigcom']<final_bprp['h_msigcom'].mean()+3*final_bprp['h_msigcom'].std()]
             final_bprp=final_bprp[final_bprp['j_msigcom']<final_bprp['j_msigcom'].mean()+3*final_bprp['j_msigcom'].std()]
             final_bprp=final_bprp[final_bprp['g_error']<final_bprp['g_error'].mean()+3*final_bprp['g_error'].std()]
