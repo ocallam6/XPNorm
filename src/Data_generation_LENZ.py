@@ -6,7 +6,10 @@ import numpy as np
 import os
 import time
 import csv
-
+from tqdm import tqdm
+import pandas as pd
+from joblib import Parallel, delayed
+from tqdm import tqdm
 
 '''
 This perpares the data for a normalising flow
@@ -28,17 +31,49 @@ from astroquery.gaia import Gaia
 import pickle
 import re
 from zero_point import zpt
-
+import healpy as hp
+import joblib
 
 #############################################################################
 ###################### Data Generation Class ################################
 #############################################################################
+from tqdm.auto import tqdm
+
+class ProgressParallel(joblib.Parallel):
+    def __call__(self, *args, **kwargs):
+        with tqdm() as self._pbar:
+            return joblib.Parallel.__call__(self, *args, **kwargs)
+
+    def print_progress(self):
+        self._pbar.total = self.n_dispatched_tasks
+        self._pbar.n = self.n_completed_tasks
+        self._pbar.refresh()
+
 
 class Data_Generation():
     def __init__(self):
-        self.places=[[342.303, -47.6786],[343.9268,-51.2097],[345.6808,-51.7997],[342.3994,-49.7344],[340.8273,-49.0403]]
-        self.places=[[246.7065, 44.0438],[165.3404, 59.5480],[220.4940,59.9686],[160.4000,56.6931],[59.1394,-45.6599],[70.4262,-53.1910],[53.0764,-28.4748]
-        ,[342.303, -47.6786],[343.9268,-51.2097],[345.6808,-51.7997],[342.3994,-49.7344],[340.8273,-49.0403]] #northern and southern
+        ebv_map = hp.read_map('/Users/mattocallaghan/XPNorm/Data/ebv_lhd.hpx.fits', verbose=False)
+        #hp.mollview((ebv_map), title='', unit='log(E(B-V) [mag])')
+        #hp.graticule()
+        nside = hp.get_nside(ebv_map)
+        npix = hp.nside2npix(nside)
+        ordering = 'ring'
+        pixel_indices = np.arange(npix)
+
+        # Get the pixel centers
+        l, b = hp.pix2ang(nside, pixel_indices,lonlat=True)
+
+
+        idx=np.argwhere((~np.isnan(ebv_map))*(ebv_map<0.01))
+
+        coords = SkyCoord(l=l*u.degree, b=b*u.degree, frame='galactic')
+        ra=coords.icrs.ra.degree
+        dec=coords.icrs.dec.degree
+        self.places=np.stack((ra[idx],dec[idx]),1)
+        print(self.places.shape[0])
+        #self.places=[[342.303, -47.6786],[343.9268,-51.2097],[345.6808,-51.7997],[342.3994,-49.7344],[340.8273,-49.0403]]
+        #self.places=[[246.7065, 44.0438],[165.3404, 59.5480],[220.4940,59.9686],[160.4000,56.6931],[59.1394,-45.6599],[70.4262,-53.1910],[53.0764,-28.4748]
+        #,[342.303, -47.6786],[343.9268,-51.2097],[345.6808,-51.7997],[342.3994,-49.7344],[340.8273,-49.0403]] #northern and southern
         #self.places=[[304.303, -59.6786]]
         #self.places=[[339.94503323, -24.53707374]] # vlow
         #self.places=[[309.50584297, -15.28053816]] #bayestar
@@ -65,8 +100,8 @@ class Data_Generation():
 
         self.bp_rp_data()
 
-        self.data.to_csv('/Users/mattocallaghan/XPNorm/Data/data_merope_1')
-        self.err.to_csv('/Users/mattocallaghan/XPNorm/Data/err_merope_1')
+        self.data.to_csv('/Users/mattocallaghan/XPNorm/Data/data_full_ps_2')
+        self.err.to_csv('/Users/mattocallaghan/XPNorm/Data/err_full_ps_2')
 
 
 
@@ -93,12 +128,12 @@ class Data_Generation():
                         #job = Gaia.launch_job_async( "select top 100 * from gaiadr2.gaia_source where parallax>0 and parallax_over_error>3. ") # Select `good' parallaxes
             qry = "SELECT * \
             FROM gaiadr3.gaia_source AS g, gaiaedr3_distance as d \
-            WHERE DISTANCE(%f, %f, g.ra, g.dec) < 28.28/60.0\
+            WHERE DISTANCE(%f, %f, g.ra, g.dec) < 0.134\
             AND g.source_id = d.source_id;" % (x, y)
             job = Gaia.launch_job_async( qry )
             tblGaia = job.get_results()       #Astropy table
             dfGaia = tblGaia.to_pandas() 
-        print(len(dfGaia))
+        #print(len(dfGaia))
         
             
         return dfGaia
@@ -122,8 +157,8 @@ class Data_Generation():
         job = Gaia.launch_job_async( qry )
         tblGaia = job.get_results()       #Astropy table
         dfGaia = tblGaia.to_pandas()  
-        print(len(dfGaia[dfGaia['number_of_neighbours'].astype(float)<2]))   
-        print(dfGaia.columns[-20:])
+        #print(len(dfGaia[dfGaia['number_of_neighbours'].astype(float)<2]))   
+        #print(dfGaia.columns[-20:])
         return dfGaia[dfGaia['number_of_neighbours']<2].reset_index(drop=True)
     
     def Get2MASSData(self,GaiaDR2SourceIDs):
@@ -145,17 +180,60 @@ class Data_Generation():
         job = Gaia.launch_job_async( qry )
         tblGaia = job.get_results()       #Astropy table
         dfGaia = tblGaia.to_pandas()  
-        print(len(dfGaia))    #convert to Pandas dataframe
+        #print(len(dfGaia))    #convert to Pandas dataframe
         return dfGaia[dfGaia['number_of_neighbours']<2].reset_index(drop=True)
     
+    def create_gaia_data(self):
+
+
+        # Function to fetch and write GAIA data
+        def fetch_and_write_gaia_data(place, first_iteration):
+
+            # Fetch GAIA data for the current place
+            data = self.GetGAIAData_BPRP(place)
+            
+            # Convert the data to a DataFrame
+            df = pd.DataFrame(data)
+            
+            if first_iteration:
+                # For the first iteration, write the DataFrame with column names
+                df.to_csv('/Users/mattocallaghan/XPNorm/Data/gaia_data_black.csv', index=False)
+            else:
+                # For subsequent iterations, append the DataFrame without column names
+                df.to_csv('/Users/mattocallaghan/XPNorm/Data/gaia_data_black.csv', mode='a', header=False, index=False)
+
+        # Define the number of processes (CPU cores) to use
+        num_processes = 4  # Change this according to the number of CPU cores available
+
+        # Create a list of arguments for each place
+        args_list = [(place, i == 0) for i, place in enumerate(self.places)]
+
+        # Use joblib to parallelize the task
+        #with tqdm(total=len(self.places), desc="Fetching and Writing GAIA Data") as pbar:
+        ProgressParallel(n_jobs=num_processes)(
+                delayed(fetch_and_write_gaia_data)(args_list[i][0],args_list[i][1]) for i in range(len(args_list))
+            )
+            #pbar.update(len(self.places))
+
+
     def create_cross_match_data(self):
-        datas=[self.GetGAIAData_BPRP(self.places[i]) for i in range(len(self.places))]
-        data=pd.concat(datas).reset_index(drop=True)
+        data=pd.read_csv('/Users/mattocallaghan/XPNorm/Data/gaia_data_black.csv').drop_duplicates(subset=['source_id'])
+        data=data[data['ruwe']<=1.4].reset_index(drop=True)
+        data=data[data['phot_bp_mean_mag']<22].reset_index(drop=True)
+        data=data[data['phot_rp_mean_mag']<22].reset_index(drop=True)
+        data=data[data['phot_g_mean_mag']<19].reset_index(drop=True)
+        data=data[data['phot_bp_mean_mag']<19].reset_index(drop=True) #check lallement et al
+                #print(len(data))
         data['source_id']=data['SOURCE_ID']
 
         # 2MASS
 
-        r2MASS=self.Get2MASSData(tuple(data['source_id'].astype(int).to_numpy().astype(str)))
+        r2MASS=[]#self.Get2MASSData(tuple(data['source_id'].astype(int).to_numpy().astype(str)))
+        chunks = np.array_split(data['source_id'].astype(int).astype(str), len(data) // 10000 + 1)
+
+        for chunk in chunks:
+            r2MASS.append(self.Get2MASSData(tuple(chunk)))
+        r2MASS=pd.concat(r2MASS)
         r2MASS['source_id']=r2MASS['SOURCE_ID']
         combined_data=data.set_index('source_id').combine_first(r2MASS.set_index('source_id')).reset_index()
         combined_data=combined_data.dropna(subset='ks_m')
@@ -170,17 +248,25 @@ class Data_Generation():
         combined_data['accept_2mass']=np.array(flag_list)
         combined_data=combined_data[combined_data['accept_2mass']==True].reset_index(drop=True)
         combined_data=combined_data.drop_duplicates(subset='source_id')
-
+        print(len(combined_data))
         # PS1
-
-        ps1=self.GetPSData(tuple(combined_data['source_id'].astype(int).to_numpy().astype(str)))
+        chunks = np.array_split(combined_data['source_id'].astype(int).astype(str), len(data) // 10000 + 1)
+        ps1=[]
+        for chunk in chunks:
+            ps1.append(self.GetPSData(tuple(chunk)))
+        ps1=pd.concat(ps1)#self.GetPSData(tuple(combined_data['source_id'].astype(int).to_numpy().astype(str)))
         ps1['source_id']=ps1['SOURCE_ID']
         combined_data=combined_data.set_index('source_id').combine_first(ps1.set_index('source_id')).reset_index()
-
+        combined_data=combined_data.drop_duplicates(subset='source_id')
+        print(len(combined_data))
 
         return combined_data
 
     def bp_rp_data(self):
+        # create the gaia pure data
+        self.create_gaia_data()
+        # cross match with 2MASS and PS
+
         merged_df=self.create_cross_match_data()
         
         if(self.bprp==True):
@@ -200,11 +286,11 @@ class Data_Generation():
         else:
             final_bprp=merged_df # bad naming convention - no bprp
         final_bprp = final_bprp.drop_duplicates(subset=['source_id'])
-        final_bprp=final_bprp[final_bprp['ruwe']<1.4].reset_index(drop=True)
+        final_bprp=final_bprp[final_bprp['ruwe']<=1.4].reset_index(drop=True)
         final_bprp=final_bprp[final_bprp['phot_bp_mean_mag']<22].reset_index(drop=True)
         final_bprp=final_bprp[final_bprp['phot_rp_mean_mag']<22].reset_index(drop=True)
-        final_bprp=final_bprp[final_bprp['phot_g_mean_mag']<18].reset_index(drop=True)
-        final_bprp=final_bprp[final_bprp['phot_bp_mean_mag']<18].reset_index(drop=True) #check lallement et al
+        final_bprp=final_bprp[final_bprp['phot_g_mean_mag']<19].reset_index(drop=True)
+        final_bprp=final_bprp[final_bprp['phot_bp_mean_mag']<19].reset_index(drop=True) #check lallement et al
  
        
 
@@ -268,7 +354,7 @@ class Data_Generation():
 
         x=x.reset_index(drop=True)
         sigma=sigma.reset_index(drop=True)
-        x=x.dropna().reset_index(drop=True)
+        #x=x.dropna().reset_index(drop=True)
         self.mean=x.values.mean(axis=0)[None,:]
 
         self.std=x.values.std(axis=0)[None,:]

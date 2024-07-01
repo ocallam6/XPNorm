@@ -15,6 +15,9 @@ import equinox as eqx
 from numpyro.infer import MCMC, NUTS
 import numpyro.distributions as dist
 import numpyro
+from astropy.coordinates import SkyCoord
+import astropy.units as u
+
 #############################################################################
 ###################### FILE LOCATIONS #######################################
 #############################################################################
@@ -46,6 +49,11 @@ Learning the extinction map
         self.method='train'
 
         self.data=pd.read_csv(csv_location)[['mu','phot_g_mean_mag','phot_bp_mean_mag','phot_rp_mean_mag','j_m','h_m','g_mean_psf_mag', 'r_mean_psf_mag', 'i_mean_psf_mag', 'z_mean_psf_mag', 'y_mean_psf_mag','ks_m']].values
+        self.b=pd.read_csv(csv_location)[['ra','dec']]
+        galactic_coord = SkyCoord(ra=self.b['ra'].values*u.degree, dec=self.b['dec'].values*u.degree, frame='icrs')
+        galactic_coord = galactic_coord.transform_to('galactic')
+        self.l=galactic_coord.l.value
+        self.b=galactic_coord.b.value
 
         self.data_test=pd.read_csv(test_file)[['mu','phot_g_mean_mag','phot_bp_mean_mag','phot_rp_mean_mag','j_m','h_m','ks_m']].values
 
@@ -66,7 +74,6 @@ Learning the extinction map
                                 [0., 0., 0., 0., 0., 0,0,0,1,0,0,-1],
                                 [0., 0., 0., 0., 0., 0,0,0,0,1,0,-1],
                                 [0., 0., 0., 0., 0., 0,0,0,0,0,1,-1]])
-        print(self.data_transform.shape)
         
         g = jnp.array([0.7, 0.95])
         bp =  jnp.array([0.97, 1.28])
@@ -82,7 +89,8 @@ Learning the extinction map
 
         #self.data=self.data[(self.data[:,1]<10)*(self.data[:,1]>-2)]
         self.data=self.data[(self.data[:,0]<20)]#*(self.data[:,0]>2)]
-        self.data=self.data[:,1:]
+
+        self.data = self.data.at[:,0].set(self.data[:,0]*jnp.abs(jnp.sin(jnp.radians(self.b))))
         self.mean=jnp.mean(self.data,axis=0)
         self.std=jnp.std(self.data,axis=0)
         self.data=(self.data-self.mean)#/self.std
@@ -95,10 +103,10 @@ Learning the extinction map
         nn_width=30,)
 
         try:
-            self.flow = eqx.tree_deserialise_leaves("/Users/mattocallaghan/XPNorm/Data/NF_Jax.eqx", self.flow)
+            self.flow = eqx.tree_deserialise_leaves("/Users/mattocallaghan/XPNorm/Data/NF_Jax_dist.eqx", self.flow)
         except:
             self.train()
-            eqx.tree_serialise_leaves("/Users/mattocallaghan/XPNorm/Data/NF_Jax.eqx", self.flow)
+            eqx.tree_serialise_leaves("/Users/mattocallaghan/XPNorm/Data/NF_Jax_dist.eqx", self.flow)
             
 
     def train(self):

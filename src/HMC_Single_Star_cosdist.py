@@ -24,7 +24,7 @@ from flowjax.bijections import RationalQuadraticSpline
 from flowjax.distributions import Normal
 from flowjax.flows import masked_autoregressive_flow
 from src.jax_to_numpyro import distribution_to_numpyro
-from src.NF_Jax import JaxNormFlow
+from src.NF_Cos_dist import JaxNormFlow
 from numpyro.infer import MCMC, NUTS
 import numpyro.distributions as dist
 import numpyro
@@ -36,6 +36,8 @@ import equinox as eqx
 import jax.numpy as jnp
 from jax import random, jit
 
+from astropy.coordinates import SkyCoord
+import astropy.units as u
 
 
 # Load saved parameters from PyTorch
@@ -53,8 +55,8 @@ HMC
 
 #directory for the pheonix spectra
 data_file='/Users/mattocallaghan/XPNorm/Data/data_full_ps_1'
-test_file='/Users/mattocallaghan/XPNorm/Data/data_noext_1'
-test_file='/Users/mattocallaghan/XPNorm/Data/data_black_ps_1'
+test_file='/Users/mattocallaghan/XPNorm/Data/data_noext_ps_1'
+test_file='/Users/mattocallaghan/XPNorm/Data/data_bigcirc_ps_1'
 #test_file='/Users/mattocallaghan/XPNorm/Data/data_red_1'
 #test_file='/Users/mattocallaghan/XPNorm/Data/data_black_circle'
 
@@ -62,9 +64,9 @@ test_file='/Users/mattocallaghan/XPNorm/Data/data_black_ps_1'
 #test_file='/Users/mattocallaghan/XPNorm/Data/data_black_circle_20'
 #test_file='/Users/mattocallaghan/XPNorm/Data/data_noext'
 
-err_file='/Users/mattocallaghan/XPNorm/Data/err_black_ps_1'
+err_file='/Users/mattocallaghan/XPNorm/Data/err_bigcirc_ps_1'
 
-#err_file='/Users/mattocallaghan/XPNorm/Data/err_noext_1'
+#err_file='/Users/mattocallaghan/XPNorm/Data/err_noext_ps_1'
 
 
 
@@ -92,7 +94,11 @@ Learning the extinction map
         self.data_err=pd.read_csv(err_file)[['mu_error','g_error','bp_error','rp_error','j_msigcom','h_msigcom','g_mean_psf_mag_error', 'r_mean_psf_mag_error', 'i_mean_psf_mag_error', 'z_mean_psf_mag_error', 'y_mean_psf_mag_error','ks_msigcom']].values
 
 
-
+        self.b=pd.read_csv(test_file)[['ra','dec']]
+        galactic_coord = SkyCoord(ra=self.b['ra'].values*u.degree, dec=self.b['dec'].values*u.degree, frame='icrs')
+        galactic_coord = galactic_coord.transform_to('galactic')
+        self.l=galactic_coord.l.value
+        self.b=galactic_coord.b.value
 
 
 
@@ -112,7 +118,10 @@ Learning the extinction map
         
 
         self.data=jnp.einsum('ij,bj->bi',jnp.array(self.data_transform),jnp.array(self.data_test))
-        self.error=jnp.stack([jnp.diag(arr**2) for arr in self.data_err])
+        self.error=jnp.stack([jnp.diag(arr)**2 for arr in self.data_err])
+        # DOES THIS NEED TOBE ERR SQUARED
+        self.error=self.error.at[:,0,0].set(self.error[:,0,0]*(jnp.abs(jnp.sin(jnp.radians(self.b))**2)))
+
         #self.error=jnp.stack([jnp.eye(7) for arr in self.data_err])
         self.error=(jnp.einsum('ik,bkj->bij',(jnp.array(self.data_transform)),self.error))
 
@@ -120,12 +129,10 @@ Learning the extinction map
         #self.data=self.data[(self.data[:,1]<10)*(self.data[:,1]>-2)]
         #self.data=self.data[(self.data[:,0]<20)]#*(self.data[:,0]>2)]
         self.distance=10**((self.data[:,0]+5)/5)
-        self.data=self.data[:,1:]
+        self.data = self.data.at[:,0].set(self.data[:,0]*jnp.abs(jnp.sin(jnp.radians(self.b))))
         self.mean=jnp.mean(self.data,axis=0)
         self.std=jnp.std(self.data,axis=0)
         self.data=(self.data-self.normalising_flow.mean)
-
-        self.error=self.error[:,1:,1:]
 
 
 #############################################################################
@@ -227,7 +234,7 @@ Learning the extinction map
 
 
 #############################################################################
-###################### Sampler#######################################
+############################# Sampler########################################
 #############################################################################
 
 
@@ -249,12 +256,13 @@ Learning the extinction map
 
             #extinction_vector=jnp.stack([self.extinction_coeff((x+self.normalising_flow.mean)[:,-1],a0,i) for i in jnp.arange(5,-1,-1)]).T
             extinction_vector=(jnp.einsum('ij,bj->bi',(self.normalising_flow.data_transform[1:,1:]),extinction_vector))
-
+            extinction_vector=jnp.concatenate((jnp.zeros(shape=(extinction_vector.shape[0],1)),extinction_vector),1)
             x_obs=x+(a0[:,None]*extinction_vector)
             
 
-            numpyro.sample('obs', dist.MultivariateNormal(loc=x_obs[:,:],covariance_matrix=err+(0.01**2)*jnp.eye(11)), obs=data)
+            numpyro.sample('obs', dist.MultivariateNormal(loc=x_obs[:,:],covariance_matrix=err+(0.01**2)*jnp.eye(12)), obs=data)
             # Observed data is sampled from a Gaussian distribution
+
 
 
     def run_model(self):
@@ -274,12 +282,13 @@ Learning the extinction map
 
         nuts_kernel = NUTS(self.model)
 
-        mcmc = MCMC(nuts_kernel, num_warmup=100, num_samples=100,num_chains=jax.local_device_count())
+        mcmc = MCMC(nuts_kernel, num_warmup=200, num_samples=200,num_chains=jax.local_device_count())
 
 
         rng_key = random.PRNGKey(0)
 
         mcmc.run(rng_key, self.data[i:i+1],self.error[i])
+
         return mcmc.get_samples()['a0'][:].mean(),mcmc.get_samples()['a0'][:].std()
         
 
