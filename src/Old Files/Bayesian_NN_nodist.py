@@ -1,3 +1,14 @@
+"""
+THIS IS AN OBSELETE FILE
+This is an old method of using Bayesian Neural Networks to derive extinction
+profiles along the line of sight.
+This uses no distance information
+
+
+"""
+
+
+
 import torch.nn as nn
 import pandas as pd
 import numpy as np
@@ -7,6 +18,8 @@ import torch.optim as optim
 from src.Normalising_Flow_nodist import Normalising_Flow_Trainer
 import matplotlib.pyplot as plt
 from tqdm import tqdm
+
+
 
 
 #############################################################################

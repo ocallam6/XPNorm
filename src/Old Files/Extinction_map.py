@@ -20,8 +20,7 @@ from pyro.nn import PyroModule, PyroSample
 import torch.nn as nn
 
 '''
-This defines the normalising flow to learn the distribution of fluxes from Gaia and photometry
-
+This defines a Neural Network to learn the extinction law generated from synthetic spectra
 '''
 
 #############################################################################
@@ -35,6 +34,10 @@ err_file='/Users/mattocallaghan/XPNorm/Data/err'
 
 
 class Extinction_Map(nn.Module):
+
+    """
+    This class defines the extinction map. Takes in
+    """
     def __init__(self,*args, **kwargs):
         super(Extinction_Map, self).__init__()
 

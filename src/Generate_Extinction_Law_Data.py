@@ -1,3 +1,10 @@
+"""
+In this data we use the Kurucz data spectra to generate extinction coefficients
+This will be learnt by a Neural network to be incorperated in our model later.
+"""
+
+
+
 from dustapprox.io import svo
 import numpy as np
 import pickle
@@ -5,12 +12,19 @@ from scipy.interpolate import CubicSpline
 from scipy.interpolate import RegularGridInterpolator
 import extinction as ext
 from astropy.constants import R_sun,pc
+from glob import glob
+#############################################################################
+###################### Filters #######################################
+#############################################################################
+# this is for the iscohrones
 filters = ["Gaia_G_EDR3", "Gaia_BP_EDR3", 'Gaia_RP_EDR3','2MASS_J','2MASS_H','2MASS_Ks','WISE_W1','WISE_W2','PS_g','PS_i','PS_r','PS_y','PS_z'] #add wise on later.
+# this is for dustapprox
 which_filters = ['GAIA/GAIA3.G','GAIA/GAIA3.Gbp', 'GAIA/GAIA3.Grp','2MASS/2MASS.J', '2MASS/2MASS.H', '2MASS/2MASS.Ks','WISE/WISE.W1','WISE/WISE.W2','PAN-STARRS/PS1.g','PAN-STARRS/PS1.i','PAN-STARRS/PS1.r','PAN-STARRS/PS1.w','PAN-STARRS/PS1.y','PAN-STARRS/PS1.z']
 passbands = svo.get_svo_passbands(which_filters)
 
-from glob import glob
-# loc needs to be where you save the synthetic spectra
+#############################################################################
+###################### Prepare stellar models #######################################
+#############################################################################
 def prepare_stellar_models(prefix,loc='/Users/mattocallaghan/VaeStar/Isochrones_data/Kurucz2003all/*.fl.dat.txt'):
     models = glob(loc)
     apfields = ['teff', 'logg', 'feh', 'alpha']

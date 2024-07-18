@@ -1,3 +1,11 @@
+"""
+THIS IS AN OBSELETE FILE
+This is an old method of using Bayesian Neural Networks to derive extinction
+profiles along the line of sight.
+
+
+"""
+
 import torch.nn as nn
 import pandas as pd
 import numpy as np

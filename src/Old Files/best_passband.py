@@ -1,4 +1,5 @@
 '''
+THIS IS AN OUT OF DATE, OBSOLETE METHOD
 Here we want to find the bast passbands for inferring the extinction
 
 '''

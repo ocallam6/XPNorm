@@ -7,20 +7,20 @@ import numpy as np
 import matplotlib.colors as mcolors
 
 if __name__=="__main__":
-    #nf=NF_Cos_dist.JaxNormFlow()
-
+    nf=NF_Cos_dist.JaxNormFlow()
+    #nf.train()
     hmc=HMC_Sampler()
 
     #hmc.plot_profile()
 
 
-    data_analysis=True
+    data_analysis=False
     if(data_analysis):
         train_data=hmc.normalising_flow.data+hmc.normalising_flow.mean
         train_distance=10**(((train_data[:,0])/(jnp.abs(jnp.sin(jnp.radians(hmc.normalising_flow.b))))+5)/5)
         
 
-        test_data=hmc.data+hmc.mean
+        test_data=hmc.data_test+hmc.mean
         test_distance=hmc.distance
 
 
@@ -59,7 +59,7 @@ if __name__=="__main__":
 
 
 
-    run_MCMC=False
+    run_MCMC=True
     if(run_MCMC):
 
         error=[]
@@ -71,8 +71,8 @@ if __name__=="__main__":
             ebvs.append((ebv))
             error.append(err)
 
-        #np.save('ebv_black',np.array(ebvs))
-        #np.save('error_red',np.array(error))
+    np.save('ebv_black',np.array(ebvs))
+    np.save('error_black',np.array(error))
 
 
     plot_distance=False

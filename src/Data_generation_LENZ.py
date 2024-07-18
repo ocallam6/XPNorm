@@ -1,25 +1,17 @@
-from cgi import test
-from typing import final
-import astropy.io.fits as fits
-import matplotlib.pyplot as plt
-import numpy as np
-import os
-import time
-import csv
-from tqdm import tqdm
-import pandas as pd
-from joblib import Parallel, delayed
-from tqdm import tqdm
+'''
+This file generates data to be used by the Normalising Flow.
+It cross matches Gaia (with and without BPRP spectra), 2MASS and PANSTARRS
+It uses the LENZ dust map to look at regions at high Galactic latitude with 
+low extinction to generate areas on the sky to query the Gaia database
 
 '''
-This perpares the data for a normalising flow
-'''
+
 
 #############################################################################
 ###################### FILE LOCATIONS #######################################
 #############################################################################
 
-from copyreg import pickle
+from math import comb
 import wave
 import pandas as pd
 from astropy.coordinates import SkyCoord, Galactic
@@ -28,16 +20,17 @@ import astropy.units as u
 from astropy.coordinates import SkyCoord
 from astroquery.gaia import Gaia
 #from gaiaxpy import convert,calibrate
-import pickle
-import re
+
 from zero_point import zpt
 import healpy as hp
 import joblib
+from tqdm.auto import tqdm
+from joblib import Parallel, delayed
+from tqdm import tqdm
 
 #############################################################################
-###################### Data Generation Class ################################
+###################### Parallel Processing Task ################################
 #############################################################################
-from tqdm.auto import tqdm
 
 class ProgressParallel(joblib.Parallel):
     def __call__(self, *args, **kwargs):
@@ -49,67 +42,120 @@ class ProgressParallel(joblib.Parallel):
         self._pbar.n = self.n_completed_tasks
         self._pbar.refresh()
 
+#############################################################################
+###################### Data Generation Class ################################
+#############################################################################
 
 class Data_Generation():
     def __init__(self):
-        ebv_map = hp.read_map('/Users/mattocallaghan/XPNorm/Data/ebv_lhd.hpx.fits', verbose=False)
-        #hp.mollview((ebv_map), title='', unit='log(E(B-V) [mag])')
-        #hp.graticule()
-        nside = hp.get_nside(ebv_map)
-        npix = hp.nside2npix(nside)
-        ordering = 'ring'
-        pixel_indices = np.arange(npix)
+        """
+        This class generates the data.
+        1) Call the LENZ Map
+            or select specific coordinates
+        2) Choose which Bands should be included.
+        3) Is the data for training the Normaliisng Flow or Inference
+        4) Specify the angular separation in the search
+        """
 
-        # Get the pixel centers
-        l, b = hp.pix2ang(nside, pixel_indices,lonlat=True)
-
-
-        idx=np.argwhere((~np.isnan(ebv_map))*(ebv_map<0.01))
-
-        coords = SkyCoord(l=l*u.degree, b=b*u.degree, frame='galactic')
-        ra=coords.icrs.ra.degree
-        dec=coords.icrs.dec.degree
-        self.places=np.stack((ra[idx],dec[idx]),1)
-        print(self.places.shape[0])
-        #self.places=[[342.303, -47.6786],[343.9268,-51.2097],[345.6808,-51.7997],[342.3994,-49.7344],[340.8273,-49.0403]]
-        #self.places=[[246.7065, 44.0438],[165.3404, 59.5480],[220.4940,59.9686],[160.4000,56.6931],[59.1394,-45.6599],[70.4262,-53.1910],[53.0764,-28.4748]
-        #,[342.303, -47.6786],[343.9268,-51.2097],[345.6808,-51.7997],[342.3994,-49.7344],[340.8273,-49.0403]] #northern and southern
-        #self.places=[[304.303, -59.6786]]
-        #self.places=[[339.94503323, -24.53707374]] # vlow
-        #self.places=[[309.50584297, -15.28053816]] #bayestar
-
-        #self.places=[[293.79249997, 72.22446142]] #pasiphae slightly off centre of black
-        #self.places=[[294.6134031, 72.33288884]] #pasiphae slightly off centre of black
-
+        self.places=self.Lenz_low_extinction_places()   
+        self.places=[[339.94503323, -24.53707374]] # vlow
         #self.places=[[295.31396796, 71.95873259]] #pasiphae red circle
         #self.places=[[294.46007047, 72.23165519]] #pasiphae black circle small
-
-        #self.places=[[191.2318,57.1060]]
-        #self.places=[[191.2318,45.1060]]
-
-        #self.places=[[56.58101793, 23.9477124]] # merope
+        print(len(self.places))
+        # What data will be include
+        self.PS=True #PANSTARRS
+        self.bprp=False #BPRP Spectra
+        self.twomass_crossmatch=True
+        # Is this for training the Normalising flow or inference
+        self.TRAIN_FLOW=True
+        if(self.TRAIN_FLOW):
+            self.samples_loop=32
+        else:
+            self.samples_loop=1
         
-        self.PS=True
-        self.bprp=False
-        self.samples_loop=1
-        self.separation=40.0/60
+        # What is the angular separation 
+        self.separation=0.134 #LENZ 
+
+        # CUTS ON DATA
+        # GAIA
+        self.ruwe_cut=1.4
+        self.bp_bound_cut=19
+        self.rp_bound_cut=22
+        self.g_bound_cut=19
+        self.error_over_parallax_cut=0.2
+
+        # magnitude error upper bound
+        self.mag_err_bound=0.05
         
         #wavelength observations for BPRP
         self.numbers = np.arange(392,992,10)
         self.wls = [str(num) for num in self.numbers]
 
-        self.bp_rp_data()
+        #Data is written to file
+        #self.create_gaia_data(gaia_temp_store_location='/Users/mattocallaghan/XPNorm/Data/temp_gaia_data.csv')
+        crossmatched_data=self.create_cross_match_data('/Users/mattocallaghan/XPNorm/Data/temp_gaia_data.csv')
+        # the next stores the data in-class
+        self.data,self.err=self.data_cuts(crossmatched_data)
 
         self.data.to_csv('/Users/mattocallaghan/XPNorm/Data/data_full_ps_2')
         self.err.to_csv('/Users/mattocallaghan/XPNorm/Data/err_full_ps_2')
 
 
 
-    def GetGAIAData_BPRP(self,arr):
-
-
+    def Lenz_low_extinction_places(self):
         '''
-        This takes an input of centres and creates 45' boxes with stars.
+        Query the LENZ Map and then return RA and DEC places
+        '''
+        # Call LENZ man
+        ebv_map = hp.read_map('/Users/mattocallaghan/XPNorm/Data/ebv_lhd.hpx.fits', verbose=False)
+        nside = hp.get_nside(ebv_map)
+        npix = hp.nside2npix(nside)
+        pixel_indices = np.arange(npix)
+        # Get the pixel centers
+        l, b = hp.pix2ang(nside, pixel_indices,lonlat=True)
+        # Choose the indices where the EBV map is low.
+        idx=np.argwhere((~np.isnan(ebv_map))*(ebv_map<0.008))
+        #Query the sky coordinates.
+        coords = SkyCoord(l=l*u.degree, b=b*u.degree, frame='galactic')
+        ra=coords.icrs.ra.degree
+        dec=coords.icrs.dec.degree
+        return np.stack((ra[idx],dec[idx]),1)
+
+
+    def create_gaia_data(self,gaia_temp_store_location):
+        '''
+        This function Creates the Gaia DataFrame
+        If the BPRP is to be returned it also returns this.
+        '''
+
+        def fetch_and_write_gaia_data(place, first_iteration):
+
+            # Fetch GAIA data for the current place
+            data = self.GetGAIAData(place)
+            
+            # Convert the data to a DataFrame
+            df = pd.DataFrame(data)
+            
+            if first_iteration:
+                # For the first iteration, write the DataFrame with column names
+                df.to_csv(gaia_temp_store_location, index=False)
+            else:
+                # For subsequent iterations, append the DataFrame without column names
+                df.to_csv(gaia_temp_store_location, mode='a', header=False, index=False)
+
+        # We run this data processing in parallel and iteratively append the csv
+        # We set the number of processes to be the maximum number.
+        num_processes = 4  
+        args_list = [(place, i == 0) for i, place in enumerate(self.places)]
+        ProgressParallel(n_jobs=num_processes)(
+                delayed(fetch_and_write_gaia_data)(args_list[i][0],args_list[i][1]) for i in range(len(args_list))
+            )
+            #pbar.update(len(self.places))
+
+    def GetGAIAData(self,arr):
+        '''
+        This takes an input of centres and creates circular region with stars within a 
+        specified separation in the class definition.
         '''
 
         x,y=arr   
@@ -118,9 +164,9 @@ class Data_Generation():
             #job = Gaia.launch_job_async( "select top 100 * from gaiadr2.gaia_source where parallax>0 and parallax_over_error>3. ") # Select `good' parallaxes
             qry = "SELECT * \
             FROM gaiadr3.gaia_source AS g, gaiaedr3_distance as d \
-            WHERE DISTANCE(%f, %f, g.ra, g.dec) < 1\
+            WHERE DISTANCE(%f, %f, g.ra, g.dec) < %f\
             AND has_xp_continuous = 'True'\
-            AND g.source_id = d.source_id;" % (x, y)
+            AND g.source_id = d.source_id;" % (x, y,self.separation)
             job = Gaia.launch_job_async( qry )
             tblGaia = job.get_results()       #Astropy table
             dfGaia = tblGaia.to_pandas()      #convert to Pandas dataframe
@@ -128,12 +174,11 @@ class Data_Generation():
                         #job = Gaia.launch_job_async( "select top 100 * from gaiadr2.gaia_source where parallax>0 and parallax_over_error>3. ") # Select `good' parallaxes
             qry = "SELECT * \
             FROM gaiadr3.gaia_source AS g, gaiaedr3_distance as d \
-            WHERE DISTANCE(%f, %f, g.ra, g.dec) < 0.134\
-            AND g.source_id = d.source_id;" % (x, y)
+            WHERE DISTANCE(%f, %f, g.ra, g.dec) < %f\
+            AND g.source_id = d.source_id;" % (x, y,self.separation)
             job = Gaia.launch_job_async( qry )
             tblGaia = job.get_results()       #Astropy table
             dfGaia = tblGaia.to_pandas() 
-        #print(len(dfGaia))
         
             
         return dfGaia
@@ -141,7 +186,8 @@ class Data_Generation():
     def GetPSData(self,GaiaDR2SourceIDs):
 
         '''
-        This cross matches the 2mass data based on a set of source ids from Gaia
+        Given a list of IDs from Gaia this queries the Panstarrs database
+        for the best cross match.
         '''
 
         dfGaia = pd.DataFrame()
@@ -157,14 +203,17 @@ class Data_Generation():
         job = Gaia.launch_job_async( qry )
         tblGaia = job.get_results()       #Astropy table
         dfGaia = tblGaia.to_pandas()  
-        #print(len(dfGaia[dfGaia['number_of_neighbours'].astype(float)<2]))   
-        #print(dfGaia.columns[-20:])
+
+        #number_of_neighbours, which indicates how many sources 
+        # in Pan-STARRS are matched with this source in Gaia.
+        # Our cross match will pick only stars when there is one good match
         return dfGaia[dfGaia['number_of_neighbours']<2].reset_index(drop=True)
     
     def Get2MASSData(self,GaiaDR2SourceIDs):
 
         '''
-        This cross matches the 2mass data based on a set of source ids from Gaia
+        Given a list of IDs from Gaia this queries the 2MASS database
+        for the best cross match.
         '''
 
         dfGaia = pd.DataFrame()
@@ -181,95 +230,81 @@ class Data_Generation():
         tblGaia = job.get_results()       #Astropy table
         dfGaia = tblGaia.to_pandas()  
         #print(len(dfGaia))    #convert to Pandas dataframe
+        #number_of_neighbours, which indicates how many sources 
+        # in 2mass are matched with this source in Gaia.
+        # Our cross match will pick only stars when there is one good match
         return dfGaia[dfGaia['number_of_neighbours']<2].reset_index(drop=True)
     
-    def create_gaia_data(self):
 
+    def create_cross_match_data(self,gaia_temp_store_location):
+        # Call in the data and drop dupicates
+        data=pd.read_csv(gaia_temp_store_location,low_memory=True).drop_duplicates(subset=['source_id'])
 
-        # Function to fetch and write GAIA data
-        def fetch_and_write_gaia_data(place, first_iteration):
-
-            # Fetch GAIA data for the current place
-            data = self.GetGAIAData_BPRP(place)
-            
-            # Convert the data to a DataFrame
-            df = pd.DataFrame(data)
-            
-            if first_iteration:
-                # For the first iteration, write the DataFrame with column names
-                df.to_csv('/Users/mattocallaghan/XPNorm/Data/gaia_data_black.csv', index=False)
-            else:
-                # For subsequent iterations, append the DataFrame without column names
-                df.to_csv('/Users/mattocallaghan/XPNorm/Data/gaia_data_black.csv', mode='a', header=False, index=False)
-
-        # Define the number of processes (CPU cores) to use
-        num_processes = 4  # Change this according to the number of CPU cores available
-
-        # Create a list of arguments for each place
-        args_list = [(place, i == 0) for i, place in enumerate(self.places)]
-
-        # Use joblib to parallelize the task
-        #with tqdm(total=len(self.places), desc="Fetching and Writing GAIA Data") as pbar:
-        ProgressParallel(n_jobs=num_processes)(
-                delayed(fetch_and_write_gaia_data)(args_list[i][0],args_list[i][1]) for i in range(len(args_list))
-            )
-            #pbar.update(len(self.places))
-
-
-    def create_cross_match_data(self):
-        data=pd.read_csv('/Users/mattocallaghan/XPNorm/Data/gaia_data_black.csv').drop_duplicates(subset=['source_id'])
-        data=data[data['ruwe']<=1.4].reset_index(drop=True)
-        data=data[data['phot_bp_mean_mag']<22].reset_index(drop=True)
-        data=data[data['phot_rp_mean_mag']<22].reset_index(drop=True)
-        data=data[data['phot_g_mean_mag']<19].reset_index(drop=True)
-        data=data[data['phot_bp_mean_mag']<19].reset_index(drop=True) #check lallement et al
-                #print(len(data))
+        # Make a RUWE_cut
+        data=data[data['ruwe']<=self.ruwe_cut].reset_index(drop=True)
+        # Make brightness cuts which have taken from Lallement et al
+        # we make cuts here to avoid needlessly querying them from Gaia
+        data=data[data['phot_bp_mean_mag']<self.bp_bound_cut].reset_index(drop=True)
+        data=data[data['phot_rp_mean_mag']<self.rp_bound_cut].reset_index(drop=True)
+        data=data[data['phot_g_mean_mag']<self.g_bound_cut].reset_index(drop=True)
+        # this name change is to match 2MASS
         data['source_id']=data['SOURCE_ID']
 
-        # 2MASS
+        #############################################################################
+        ###################### 2MASS ################################
+        ##############################
+        # We read the data in Chunks as the Gaia query has an upper limit on sources
+        if(self.twomass_crossmatch):
+            
+            r2MASS=[]
+            chunks = np.array_split(data['source_id'].astype(int).astype(str), len(data) // 10000 + 1)
 
-        r2MASS=[]#self.Get2MASSData(tuple(data['source_id'].astype(int).to_numpy().astype(str)))
-        chunks = np.array_split(data['source_id'].astype(int).astype(str), len(data) // 10000 + 1)
+            for chunk in chunks:
+                r2MASS.append(self.Get2MASSData(tuple(chunk)))
+            r2MASS=pd.concat(r2MASS)
+            r2MASS['source_id']=r2MASS['SOURCE_ID']
+            combined_data=data.set_index('source_id').combine_first(r2MASS.set_index('source_id')).reset_index()
+            # Drop the data based on assuming everything must have a KS magnitude
+            combined_data=combined_data.dropna(subset='ks_m')
+            # Make AAA selection cut on the 2MASS data
+            flags=combined_data['ph_qual'].values
+            flag_list=[]
 
-        for chunk in chunks:
-            r2MASS.append(self.Get2MASSData(tuple(chunk)))
-        r2MASS=pd.concat(r2MASS)
-        r2MASS['source_id']=r2MASS['SOURCE_ID']
-        combined_data=data.set_index('source_id').combine_first(r2MASS.set_index('source_id')).reset_index()
-        combined_data=combined_data.dropna(subset='ks_m')
-        # Make AAA selection cut on the 2MASS data
-        flags=combined_data['ph_qual'].values
-        flag_list=[]
-        for i in range(len(flags)):
-            if('X' in str(flags[i]) or ('U' in str(flags[i])) or ('F' in str(flags[i])) or ('E' in str(flags[i])) or ('D' in str(flags[i])) or ('C' in str(flags[i])) or ('B' in str(flags[i])) or ('n' in str(flags[i])) ):
-                flag_list.append(False)
-            else:
-                flag_list.append(True)
-        combined_data['accept_2mass']=np.array(flag_list)
-        combined_data=combined_data[combined_data['accept_2mass']==True].reset_index(drop=True)
-        combined_data=combined_data.drop_duplicates(subset='source_id')
-        print(len(combined_data))
-        # PS1
-        chunks = np.array_split(combined_data['source_id'].astype(int).astype(str), len(data) // 10000 + 1)
-        ps1=[]
-        for chunk in chunks:
-            ps1.append(self.GetPSData(tuple(chunk)))
-        ps1=pd.concat(ps1)#self.GetPSData(tuple(combined_data['source_id'].astype(int).to_numpy().astype(str)))
-        ps1['source_id']=ps1['SOURCE_ID']
-        combined_data=combined_data.set_index('source_id').combine_first(ps1.set_index('source_id')).reset_index()
-        combined_data=combined_data.drop_duplicates(subset='source_id')
-        print(len(combined_data))
+            #MAKE a cut on the flags. Has to be A quality
+            for i in range(len(flags)):
+                if('X' in str(flags[i]) or ('U' in str(flags[i])) or ('F' in str(flags[i])) or ('E' in str(flags[i])) or ('D' in str(flags[i])) or ('C' in str(flags[i])) or ('B' in str(flags[i])) or ('n' in str(flags[i])) ):
+                    flag_list.append(False)
+                else:
+                    flag_list.append(True)
+            combined_data['accept_2mass']=np.array(flag_list)
+            combined_data=combined_data[combined_data['accept_2mass']==True].reset_index(drop=True)
+            combined_data=combined_data.drop_duplicates(subset='source_id')
+        else:
+            combined_data=data
+        #############################################################################
+        ###################### PANSTARRS ################################
+        ##############################
 
+        if(self.PS):
+            chunks = np.array_split(combined_data['source_id'].astype(int).astype(str), len(data) // 10000 + 1)
+            ps1=[]
+            for chunk in chunks:
+                ps1.append(self.GetPSData(tuple(chunk)))
+            ps1=pd.concat(ps1)#self.GetPSData(tuple(combined_data['source_id'].astype(int).to_numpy().astype(str)))
+            ps1['source_id']=ps1['SOURCE_ID']
+            combined_data=combined_data.set_index('source_id').combine_first(ps1.set_index('source_id')).reset_index()
+            combined_data=combined_data.drop_duplicates(subset='source_id')
+
+        # Rerturn the cross matched data
         return combined_data
 
-    def bp_rp_data(self):
-        # create the gaia pure data
-        self.create_gaia_data()
-        # cross match with 2MASS and PS
-
-        merged_df=self.create_cross_match_data()
+    def data_cuts(self,merged_df):
+        """
+        This makes all extra cuts on the data and stores the data in the class
+        """
         
         if(self.bprp==True):
+            raise NotImplementedError
             idxs=split_range(len(merged_df),4999)
     
             for i in range(len(idxs)):
@@ -286,20 +321,22 @@ class Data_Generation():
         else:
             final_bprp=merged_df # bad naming convention - no bprp
         final_bprp = final_bprp.drop_duplicates(subset=['source_id'])
-        final_bprp=final_bprp[final_bprp['ruwe']<=1.4].reset_index(drop=True)
-        final_bprp=final_bprp[final_bprp['phot_bp_mean_mag']<22].reset_index(drop=True)
-        final_bprp=final_bprp[final_bprp['phot_rp_mean_mag']<22].reset_index(drop=True)
-        final_bprp=final_bprp[final_bprp['phot_g_mean_mag']<19].reset_index(drop=True)
-        final_bprp=final_bprp[final_bprp['phot_bp_mean_mag']<19].reset_index(drop=True) #check lallement et al
+        final_bprp=final_bprp[final_bprp['ruwe']<=self.ruwe_cut].reset_index(drop=True)
+        final_bprp=final_bprp[final_bprp['phot_rp_mean_mag']<self.rp_bound_cut].reset_index(drop=True)
+        final_bprp=final_bprp[final_bprp['phot_g_mean_mag']<self.g_bound_cut].reset_index(drop=True)
+        final_bprp=final_bprp[final_bprp['phot_bp_mean_mag']<self.bp_bound_cut].reset_index(drop=True) #check lallement et al
  
        
 
-       
+        ########
+        ## Load the zero points of the parallax
+        ########
         zpt.load_tables()
         final_bprp['zero_point']=final_bprp.apply(zpt.zpt_wrapper,axis=1)
-
         final_bprp['parallax']=final_bprp['parallax']-final_bprp['zero_point']
+        
         if(self.bprp==True):
+            raise NotImplementedError
             for number in self.wls:
                 column_name = number  # You can customize the column name
                 final_bprp[column_name] = np.NaN
@@ -317,31 +354,48 @@ class Data_Generation():
             error=pd.concat([final_bprp[['ks_msigcom','parallax_error','g_error','bp_error','rp_error','j_msigcom','h_msigcom']],final_bprp[[self.wls[i]+'_err' for i in range(len(self.wls))]]],axis=1)
             
         else:
-    
+            ####
+            #### Define the Gaia magnitude errors
+            ####
             final_bprp['g_error']=np.sqrt(((1/final_bprp['phot_g_mean_flux_over_error']*(2.5/np.log(10))))**2+0.003**2)
             final_bprp['bp_error']=np.sqrt(((1/final_bprp['phot_bp_mean_flux_over_error']*(2.5/np.log(10))))**2+0.003**2)
             final_bprp['rp_error']=np.sqrt(((1/final_bprp['phot_rp_mean_flux_over_error']*(2.5/np.log(10))))**2+0.003**2)
+            #### Define the Gaia distance mu and tis correpsonding error
             final_bprp['mu_error']=np.sqrt(((5/np.log(10))*(final_bprp['parallax_error']/final_bprp['parallax']))**2)
             final_bprp['mu']=2.5*np.log10((((1000)/final_bprp['parallax'])/10)**2)
-            final_bprp=final_bprp[final_bprp['parallax']>0.0]
-            final_bprp=final_bprp[(final_bprp['parallax_error']/final_bprp['parallax'])<0.2]
+            
+            if(True):
+            #if(self.TRAIN_FLOW):
+                """
+                If the model is being trained for the cut the parallax to be positive
+                Currently: always greater than zero
+                """
+                final_bprp=final_bprp[final_bprp['parallax']>0.0]
+            
+            ####
+            #### Parallax error cuts, the cut needs to be made in the training loop
+            #### to ensure we can reliably treat MU as Gaussian
+            ####
+            final_bprp=final_bprp[(final_bprp['parallax_error']/final_bprp['parallax'])<self.error_over_parallax_cut]
 
-            final_bprp=final_bprp[final_bprp['ks_msigcom']<final_bprp['ks_msigcom'].mean()+3*final_bprp['ks_msigcom'].std()]
-            final_bprp=final_bprp[final_bprp['ks_msigcom']<0.05]
-            final_bprp=final_bprp[final_bprp['h_msigcom']<0.05]
-            final_bprp=final_bprp[final_bprp['j_msigcom']<0.05]
-            final_bprp=final_bprp[final_bprp['g_mean_psf_mag_error']<0.05]
-            final_bprp=final_bprp[final_bprp['r_mean_psf_mag_error']<0.05]
-            final_bprp=final_bprp[final_bprp['i_mean_psf_mag_error']<0.05]
-            final_bprp=final_bprp[final_bprp['z_mean_psf_mag_error']<0.05]
-            final_bprp=final_bprp[final_bprp['y_mean_psf_mag_error']<0.05]
+            ####
+            #### Parallax error cuts, the cut needs to be made in the training loop
+            ####
 
-            final_bprp=final_bprp[final_bprp['h_msigcom']<final_bprp['h_msigcom'].mean()+3*final_bprp['h_msigcom'].std()]
-            final_bprp=final_bprp[final_bprp['j_msigcom']<final_bprp['j_msigcom'].mean()+3*final_bprp['j_msigcom'].std()]
-            final_bprp=final_bprp[final_bprp['g_error']<final_bprp['g_error'].mean()+3*final_bprp['g_error'].std()]
-            final_bprp=final_bprp[final_bprp['bp_error']<final_bprp['bp_error'].mean()+3*final_bprp['bp_error'].std()]
-            final_bprp=final_bprp[final_bprp['rp_error']<final_bprp['rp_error'].mean()+3*final_bprp['rp_error'].std()].reset_index(drop=True)
-            inputs=final_bprp[['ks_m','mu','phot_g_mean_mag','phot_bp_mean_mag','phot_rp_mean_mag','j_m','h_m','g_mean_psf_mag', 'r_mean_psf_mag', 'i_mean_psf_mag', 'z_mean_psf_mag', 'y_mean_psf_mag','ra','dec']]
+            final_bprp=final_bprp[final_bprp['ks_msigcom']<self.mag_err_bound]
+            final_bprp=final_bprp[final_bprp['h_msigcom']<self.mag_err_bound]
+            final_bprp=final_bprp[final_bprp['j_msigcom']<self.mag_err_bound]
+            final_bprp=final_bprp[final_bprp['g_mean_psf_mag_error']<self.mag_err_bound]
+            final_bprp=final_bprp[final_bprp['r_mean_psf_mag_error']<self.mag_err_bound]
+            final_bprp=final_bprp[final_bprp['i_mean_psf_mag_error']<self.mag_err_bound]
+            final_bprp=final_bprp[final_bprp['z_mean_psf_mag_error']<self.mag_err_bound]
+            final_bprp=final_bprp[final_bprp['y_mean_psf_mag_error']<self.mag_err_bound]
+            final_bprp=final_bprp[final_bprp['g_error']<self.mag_err_bound]
+            final_bprp=final_bprp[final_bprp['bp_error']<self.mag_err_bound]
+            final_bprp=final_bprp[final_bprp['rp_error']<self.mag_err_bound].reset_index(drop=True)
+            # other cuts may need to be made.
+            
+            inputs=final_bprp#[['ks_m','mu','phot_g_mean_mag','phot_bp_mean_mag','phot_rp_mean_mag','j_m','h_m','g_mean_psf_mag', 'r_mean_psf_mag', 'i_mean_psf_mag', 'z_mean_psf_mag', 'y_mean_psf_mag','ra','dec']]
             error=final_bprp[['ks_msigcom','mu_error','g_error','bp_error','rp_error','j_msigcom','h_msigcom','g_mean_psf_mag_error','r_mean_psf_mag_error','i_mean_psf_mag_error','z_mean_psf_mag_error','y_mean_psf_mag_error','ra_error','dec_error']]
         for i in range(self.samples_loop):
             if(i==0):
@@ -354,14 +408,8 @@ class Data_Generation():
 
         x=x.reset_index(drop=True)
         sigma=sigma.reset_index(drop=True)
-        #x=x.dropna().reset_index(drop=True)
-        self.mean=x.values.mean(axis=0)[None,:]
 
-        self.std=x.values.std(axis=0)[None,:]
-
-        self.data=x
-
-        self.err=sigma
+        return x,sigma
 
 def split_range(n, m):
     result = [list(range(i, min(i + m, n))) for i in range(0, n, m)]

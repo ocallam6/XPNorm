@@ -1,4 +1,11 @@
 
+"""
+Here we define a method to learn the cos(d)-color-magnitude diagram using Normalising flows.
+We need to make sure that cos(d) is uniform. Well not necesarily but need to be careful with the distance 
+Sources closer will be less. 
+Need to get rid of outliers like galaxies.
+"""
+
 from src.Normalising_Flow_nodist import Normalising_Flow_Trainer
 
 import pandas as pd
@@ -32,7 +39,7 @@ test_file='/Users/mattocallaghan/XPNorm/Data/data_black_circle'
 #test_file='/Users/mattocallaghan/XPNorm/Data/zero_bayestar'
 #test_file='/Users/mattocallaghan/XPNorm/Data/data_red_circle_20'
 
-err_file='/Users/mattocallaghan/XPNorm/Data/err'
+err_file='/Users/mattocallaghan/XPNorm/Data/err_full_ps_1'
 
 class JaxNormFlow():
     def __init__(self,csv_location=data_file,resample=32,*args, **kwargs):
@@ -48,8 +55,29 @@ Learning the extinction map
 
         self.method='train'
 
-        self.data=pd.read_csv(csv_location)[['mu','phot_g_mean_mag','phot_bp_mean_mag','phot_rp_mean_mag','j_m','h_m','g_mean_psf_mag', 'r_mean_psf_mag', 'i_mean_psf_mag', 'z_mean_psf_mag', 'y_mean_psf_mag','ks_m']].values
-        self.b=pd.read_csv(csv_location)[['ra','dec']]
+        self.data=pd.read_csv(csv_location)[['mu','phot_g_mean_mag','phot_bp_mean_mag','phot_rp_mean_mag','j_m','h_m','g_mean_psf_mag', 'r_mean_psf_mag', 'i_mean_psf_mag', 'z_mean_psf_mag', 'y_mean_psf_mag','ks_m']]
+        self.mu_error=pd.read_csv(err_file)['mu_error']
+        self.data=self.data[self.mu_error/self.data['mu']<0.01]
+        self.data=self.data[10**((self.data['mu']+5)/5)<4000]
+        self.mu_error=self.mu_error.loc[self.data.index]
+        self.data=self.data[self.mu_error/self.data['mu']<0.01]
+
+
+
+        self.data=self.data[self.data['phot_g_mean_mag']>13]
+
+        self.data=self.data[self.data['ks_m']-self.data['mu']<10.0]
+        self.data=self.data[self.data['phot_bp_mean_mag']-self.data['phot_rp_mean_mag']>0.0]
+
+
+        self.b=pd.read_csv(csv_location)[['ra','dec']].loc[self.data.index]
+        self.data=self.data.values
+
+
+
+
+        
+        
         galactic_coord = SkyCoord(ra=self.b['ra'].values*u.degree, dec=self.b['dec'].values*u.degree, frame='icrs')
         galactic_coord = galactic_coord.transform_to('galactic')
         self.l=galactic_coord.l.value
