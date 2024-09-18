@@ -136,11 +136,11 @@ def extinction_calculation(av,feh,logg,teff,Rv):
     extinction=flux_from_parameters(av,feh,logg,teff,Rv,R=1,d=10)-flux_from_parameters(0,feh,logg,teff,Rv,R=1,d=10)
     return extinction
 
-teff=np.arange(3500,6000,50)
-logg=np.arange(3,5,0.05)
-feh=np.arange(-1,0.5,0.1)
+teff=np.arange(3500,10000,50)
+logg=np.arange(0,5,0.05)
+feh=np.arange(-3,0.5,0.1)
 #Rv=np.arange(1,5,0.2)
-av=np.arange(0.001,1,0.05)
+av=np.arange(0.001,2,0.05)
 
 mesh=np.meshgrid(teff,logg,feh,av)
 teff=mesh[0].flatten()
@@ -154,6 +154,6 @@ for i in range(len(teff)):
     exts.append(extinction_calculation(av[i],feh[i],logg[i],teff[i],3.1))
     vals.append(flux_from_parameters(0,feh[i],logg[i],teff[i],3.1))
     
-np.save('exts_test',np.concatenate(exts,0))
-np.save('vals_test',np.concatenate(vals,0))
+np.save('exts_dense',np.concatenate(exts,0))
+np.save('vals_dense',np.concatenate(vals,0))
     

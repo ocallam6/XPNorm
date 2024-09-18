@@ -1,7 +1,4 @@
 """
-We learn the extinction law from the Phoenix spectra as a function of A0, and two colors
-
-
 Learn it as a Gaussian model. This is because of incertainty in modelling at lower absolute magnitude. The extinction coeffieicents are driven
 by feh here. 
 """
@@ -69,6 +66,9 @@ This is to be learned as a function of A0, GK, RPK
         self.bprp=self.data['av']#-self.data['Gaia_G_EDR3']
 
 
+        #plt.scatter(self.data['GK'],self.data['RPK'])
+       # np.save('/Users/mattocallaghan/XPNorm/Data/check_arr',self.data[['GK','RPK']].values)
+
         #self.data=self.data[['av',"GK","RPK","k_Gaia_G_EDR3", "k_Gaia_BP_EDR3", 'k_Gaia_RP_EDR3','k_2MASS_J','k_2MASS_H','k_2MASS_Ks','k_PS_g','k_PS_i','k_PS_r','k_PS_y','k_PS_z']].dropna().values
         self.data=self.data[['av',"GK","RPK","k_Gaia_G_EDR3", "k_Gaia_BP_EDR3", 'k_Gaia_RP_EDR3','k_2MASS_J','k_2MASS_H','k_2MASS_Ks','k_PS_g','k_PS_i','k_PS_r','k_PS_y','k_PS_z']].dropna().values
 
@@ -124,15 +124,23 @@ class Extinction_NN(nn.Module):
 
     def __init__(self):
         super(Extinction_NN, self).__init__()
-        self.fc1 = nn.Linear(3, 100)  # Input dimension 12, output dimension 64
-        self.fc2 = nn.Linear(100, 100)  # Input dimension 64, output dimension 32
-        self.fc3 = nn.Linear(100, 11)  # Input dimension 32, output dimension 11
+        self.fc1 = nn.Linear(3, 5)  # Input dimension 12, output dimension 64
+        self.fc2 = nn.Linear(5, 5)  # Input dimension 64, output dimension 32
+        self.fc3 = nn.Linear(5, 11*2)  # Input dimension 32, output dimension 11, twice for mean, var
         self.relu = nn.ReLU()
     def forward(self, x):
         x = self.relu(self.fc1(x))
         x = self.relu(self.fc2(x))
         x = self.fc3(x)
         return x
+
+
+def loss_fn(y,y_real,sig):
+    dy=(y-y_real)/(2*torch.exp(sig)**2)
+    loss=(dy**2).sum(-1)+2*(sig).sum(-1)
+    return loss.mean()
+
+
 if(TRAIN):
     # Generate Training Data
     ext=Data_Extinction()
@@ -142,7 +150,7 @@ if(TRAIN):
     optimizer = optim.Adam(model.parameters())
 
     # Define the loss function (Mean Squared Error)
-    criterion = nn.MSELoss()
+    criterion = loss_fn#nn.MSELoss()
 
     # You can add L2 regularization by adding weight decay parameter to Adam optimizer
     #optimizer = optim.Adam(model.parameters(), weight_decay=0.001)
@@ -184,7 +192,7 @@ if(TRAIN):
             outputs = model(inputs[:,:3])
 
             # Calculate loss
-            loss = criterion(outputs, inputs[:,3:])
+            loss = criterion(outputs[:,:11], inputs[:,3:],outputs[:,11:])
 
             # Backward pass and optimize
             loss.backward()
@@ -195,15 +203,130 @@ if(TRAIN):
             if i % 100 == 0:  # Print every 10 mini-batches
                 print('[%d, %5d] loss: %.10f' % (epoch + 1, i + 1, running_loss / 100))
                 running_loss = 0.0
-    torch.save(model.state_dict(), '/Users/mattocallaghan/XPNorm/Data/model_extinction_2')
+    torch.save(model.state_dict(), '/Users/mattocallaghan/XPNorm/Data/model_extinction_2_gauss')
 
 if(PLOT):
 
     ext=Data_Extinction()
 
     model = Extinction_NN()  # Re-instantiate the model
-    model.load_state_dict(torch.load('/Users/mattocallaghan/XPNorm/Data/model_extinction_2'))
+    model.load_state_dict(torch.load('/Users/mattocallaghan/XPNorm/Data/model_extinction_2_gauss'))
 
+
+
+
+    # Assuming ext is your input data object with necessary attributes
+    
+    grads=[]
+    for i in range(len(ext.data)):
+        inputs = torch.tensor(ext.data[i, :3], dtype=torch.float32, requires_grad=True)
+    # Forward pass to get the outputs
+        outputs = model(inputs)[:11]  # Take the first 11 outputs
+
+        # Apply standard deviation and mean adjustments
+        outputs = outputs * torch.tensor(ext.std[3:], dtype=torch.float32) + torch.tensor(ext.mean[3:], dtype=torch.float32)
+
+        # Compute the gradient of the sum of outputs with respect to the inputs
+        gradients = torch.autograd.grad((outputs**2).sum(-1), inputs, create_graph=True)[0]
+
+    # Compute the norm of the gradients for each input in the batch
+        gradient_norms = gradients.norm(2, dim=0)  # L2 norm along the input dimensions
+
+    # Optionally, convert to numpy if needed
+        gradient_norms = gradient_norms.detach().numpy()
+        grads.append(gradient_norms)
+
+    gradient_norms=np.stack(grads)
+    fig,axes=plt.subplots(1,1)
+    axes=[axes]#.flatten()
+    axes[0].scatter((ext.data[:,2]*ext.std[2]+ext.mean[2]),gradient_norms,s=0.1)
+    axes[0].set_xlabel('$m_{G}-m_{K_s}$', fontsize=12)  # Adjust the label and font size as needed
+    axes[0].set_ylabel('$A_G/A_V$', fontsize=12) 
+    plt.show()
+
+
+
+    fig,axes=plt.subplots(1,1)
+    axes=[axes]#.flatten()
+    p=axes[0].scatter((ext.data[:,2]*ext.std[2]+ext.mean[2]),(ext.data[:,1]*ext.std[1]+ext.mean[1]),c=gradient_norms,s=1)
+    axes[0].set_xlabel('$m_{G}-m_{K_s}$', fontsize=12)  # Adjust the label and font size as needed
+    axes[0].set_ylabel('$A_G/A_V$', fontsize=12) 
+    plt.colorbar(p)
+    plt.show()
+
+
+
+
+
+
+
+
+
+
+    fig, axes = plt.subplots(3, 4, figsize=(7, 5))
+    axes = axes.flatten()
+
+    # Calculate the outputs using the model and data
+    outputs = (np.exp(model(torch.tensor(ext.data[:, :3], dtype=torch.float32)).detach().numpy()[:, 11:]) * ext.std[3:])
+
+    # Define the y-axis labels
+    y_labels = [r'$\sigma(k_G)$', r'$\sigma(k_{BP})$', r'$\sigma(k_{RP})$', r'$\sigma(k_J)$',r'$\sigma(k_H)$', r'$\sigma(k_{K_s})$', r'$\sigma(k_{g})$', r'$\sigma(k_i)$',r'$\sigma(k_r)$', r'$\sigma(k_{y})$', r'$\sigma(k_{z})$']
+
+    # Plot the data and label the axes
+    for i in range(11):
+        axes[i].scatter(ext.data[:, 1] * ext.std[1] + ext.mean[1], outputs[:, i], s=1)
+        axes[i].set_ylabel(y_labels[i],fontsize=11)  # Set the y-axis label for each subplot
+        axes[i].set_xlabel('$m_{G}-m_{K_s}$',fontsize=11)
+    # Ensure the layout is tight and avoid overlapping of plots
+    axes[-1].scatter(ext.teff, ext.data[:, 1] * ext.std[1] + ext.mean[1], s=1)
+    axes[-1].set_ylabel('$m_{G}-m_{K_s}$',fontsize=11)  # Set the y-axis label for each subplot
+    axes[-1].set_xlabel('$T_{eff}$',fontsize=11)
+    plt.tight_layout()
+
+    # Display the figure
+    plt.show()
+
+    fig, axes = plt.subplots(3, 4, figsize=(7, 5))
+    axes = axes.flatten()
+
+    # Calculate the outputs using the model and data
+    outputs = ((model(torch.tensor(ext.data[:, :3], dtype=torch.float32)).detach().numpy()[:, :11]) * ext.std[3:]+ext.mean[3:])
+
+    # Define the y-axis labels
+    y_labels = [r'$k_G$', r'$k_{BP}$', r'$k_{RP}$', r'$k_J$',r'$k_H$', r'$k_{K_s}$', r'$k_{g}$', r'$k_i$',r'$k_r$', r'$k_{y}$', r'$k_{z}$']
+
+    # Plot the data and label the axes
+    for i in range(11):
+        axes[i].scatter(ext.data[:, 1] * ext.std[1] + ext.mean[1], outputs[:, i], s=1)
+        axes[i].set_ylabel(y_labels[i],fontsize=11)  # Set the y-axis label for each subplot
+        axes[i].set_xlabel('$m_{G}-m_{K_s}$',fontsize=11)
+    # Ensure the layout is tight and avoid overlapping of plots
+    axes[-1].scatter(ext.teff, outputs[:, 0], s=1)
+    axes[-1].set_ylabel(y_labels[0],fontsize=11)  # Set the y-axis label for each subplot
+    axes[-1].set_xlabel('$T_{eff}$',fontsize=11)
+
+    plt.tight_layout()
+
+    # Display the figure
+    plt.show()
+
+
+    #plt.scatter(outputs[:,0],(x_input[:,3:].detach().numpy()*ext.std[3:]+ext.mean[3:])[:,0])
+    fig,axes=plt.subplots(1,1,figsize=(6, 4))
+    axes=[axes]#.flatten()
+    outputs=(model(torch.tensor(ext.data[:,:3],dtype=torch.float32)).detach().numpy()[:,:11]*ext.std[3:]+ext.mean[3:])
+    axes[0].scatter((ext.data[:,1]*ext.std[1]+ext.mean[1]),(ext.data[:,3:][:,0]*ext.std[3+0]+ext.mean[3+0]),label='Training Data',s=10)
+    axes[0].scatter(ext.data[:,1]*ext.std[1]+ext.mean[1],outputs[:,0],label='Training Prediction',s=10)
+    test=torch.tensor((ext.data_test-ext.mean)/ext.std,dtype=torch.float32)
+
+    outputs = model(test[:,:3]).detach().numpy()[:,:11]*ext.std[3:]+ext.mean[3:]
+    
+    axes[0].scatter((ext.data_test[:,1]),(ext.data_test[:,3:][:,0]),label='Test Data',s=10)
+    axes[0].scatter(ext.data_test[:,1],outputs[:,0], label='Test Preditction',s=10)
+    axes[0].set_xlabel('$m_{G}-m_{K_s}$',fontsize=11)
+    axes[0].set_ylabel('$k_{G}$',fontsize=11)
+    plt.legend()
+    plt.show()
 
     fig,axes=plt.subplots(1,1)
     axes=[axes]#.flatten()
@@ -212,6 +335,19 @@ if(PLOT):
     axes[0].set_ylabel('$A_G/A_V$', fontsize=12) 
     plt.show()
 
+
+
+
+
+
+
+
+
+
+
+
+
+"""
     fig,axes=plt.subplots(3,1)
     axes=axes.flatten()
     axes[0].scatter((ext.data[:,1]*ext.std[1]+ext.mean[1]),(ext.data[:,3:][:,1]*ext.std[3+1]+ext.mean[3+1]),c=ext.logg,s=0.1)
@@ -228,22 +364,6 @@ if(PLOT):
 
     plt.tight_layout()
     plt.show()
-
-
-    #plt.scatter(outputs[:,0],(x_input[:,3:].detach().numpy()*ext.std[3:]+ext.mean[3:])[:,0])
-
-    outputs=model(torch.tensor(ext.data[:,:3],dtype=torch.float32)).detach().numpy()*ext.std[3:]+ext.mean[3:]
-    plt.scatter((ext.data[:,1]*ext.std[1]+ext.mean[1]),(ext.data[:,3:][:,2]*ext.std[3+2]+ext.mean[3+2]),label='real data')
-    plt.scatter(ext.data[:,1]*ext.std[1]+ext.mean[1],outputs[:,2],label='data output')
-    test=torch.tensor((ext.data_test-ext.mean)/ext.std,dtype=torch.float32)
-
-    outputs = model(test[:,:3]).detach().numpy()*ext.std[3:]+ext.mean[3:]
-    
-    plt.scatter((ext.data_test[:,1]),(ext.data_test[:,3:][:,2]),label='real test')
-    plt.scatter(ext.data_test[:,1],outputs[:,2], label='output test')
-    plt.legend()
-    plt.show()
-
 
 
     test=torch.tensor((ext.data_test-ext.mean)/ext.std,dtype=torch.float32)
@@ -268,3 +388,4 @@ if(PLOT):
 
 
 
+"""

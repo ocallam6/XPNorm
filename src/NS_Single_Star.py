@@ -3,17 +3,14 @@ We look to perform inference on the extinction parameter using the assumption th
 far enough away from the galactic centre the distribution of stellar parameters is a 
 nice function of the cos(d).
 https://www.cosmos.esa.int/web/gaia/iow_20200320
+We use the nested sampling algorithms to attempt to avoid the jagged nature of any of the functions.
 '''
+from tabnanny import verbose
 from src.NF_Cos_dist import JaxNormFlow
-"""
-optax.adam(learning_rate)
-"""
 
+
+import scipy
 import torch
-from torch import nn
-import normflows as nf
-
-import os
 import numpy as np
 from matplotlib import pyplot as plt
 from tqdm import tqdm
@@ -54,24 +51,14 @@ import astropy.units as u
 #############################################################################
 
 #directory for the pheonix spectra
-data_file='/Users/mattocallaghan/XPNorm/Data/data_full_ps_1'
-test_file='/Users/mattocallaghan/XPNorm/Data/data_high_g'
-#test_file='/Users/mattocallaghan/XPNorm/Data/data_red_circle'
-test_file='/Users/mattocallaghan/XPNorm/Data/data_black_circle'
-#test_file='/Users/mattocallaghan/XPNorm/Data/data_circ_no2mass'
-#test_file='/Users/mattocallaghan/XPNorm/Data/data_red_1'
-#test_file='/Users/mattocallaghan/XPNorm/Data/data_black_circle'
+data_file='/Users/mattocallaghan/XPNorm/Data/data_full_ps_2'
 
-#test_file='/Users/mattocallaghan/XPNorm/Data/data_red_circle'
-#test_file='/Users/mattocallaghan/XPNorm/Data/data_black_circle_20'
-#test_file='/Users/mattocallaghan/XPNorm/Data/data_noext'
+test_file='/Users/mattocallaghan/XPNorm/Data/data_high_g'
+test_file='/Users/mattocallaghan/XPNorm/Data/data_black_circle'
+
 
 err_file='/Users/mattocallaghan/XPNorm/Data/err_high_g'
 err_file='/Users/mattocallaghan/XPNorm/Data/err__black_circle'
-#err_file='/Users/mattocallaghan/XPNorm/Data/err__red_circle'
-
-#err_file='/Users/mattocallaghan/XPNorm/Data/err_circ_no2mass'
-#err_file='/Users/mattocallaghan/XPNorm/Data/err_noext_ps_1'
 
 ############################################################################# 
 ###################### HMC SAMPLER #######################################
@@ -79,7 +66,7 @@ err_file='/Users/mattocallaghan/XPNorm/Data/err__black_circle'
 
 
 
-class HMC_Sampler():
+class NS_Sampler():
     def __init__(self,csv_location=data_file,resample=32,*args, **kwargs):
 
 
@@ -318,9 +305,6 @@ class HMC_Sampler():
 
 
 
-
-
-
 #############################################################################
 ############################# Sampler########################################
 #############################################################################
@@ -330,7 +314,9 @@ class HMC_Sampler():
         # Prior distribution for the mean
         with numpyro.plate('data', len(data)):
             a0 = numpyro.sample('a0', dist.Uniform(0.001,1.0))
-            x = numpyro.sample('x', self.dist_nf)+self.normalising_flow.mean
+            z = numpyro.sample('z', dist.Uniform(0.001,1.0).expand([1,12]))
+            x=jax.vmap(self.normalising_flow.flow.bijection.transform)(z)+self.normalising_flow.mean
+
             
             ### Use the extinction neural network to define Ax/A0
             x_observed,x_std=self.extincted_phot(x,a0)
@@ -346,7 +332,7 @@ class HMC_Sampler():
                 numpyro.sample('obs', dist.MultivariateNormal(loc=x_obs[:,:],covariance_matrix=err+(0.01**2)*jnp.eye(9)), obs=data)
             # Match to data
             else:
-                numpyro.sample('obs', dist.MultivariateNormal(loc=x_obs[:,:],covariance_matrix=err+(0.001**2)*jnp.eye(12)), obs=data)
+                numpyro.sample('obs', dist.MultivariateNormal(loc=x_obs[:,:],covariance_matrix=err+(0.01**2)*jnp.eye(12)), obs=data)
             # Observed data is sampled from a Gaussian distribution
     def extincted_phot(self,x,a0,subtract=False):
             #the input of thiss should be in physical units of magnitudes
@@ -393,44 +379,6 @@ class HMC_Sampler():
             return x_obs,x_std
 
 
-    def run_model(self):
-
-        nuts_kernel = NUTS(self.model)
-
-        mcmc = MCMC(nuts_kernel, num_warmup=2000, num_samples=2000,num_chains=jax.local_device_count())
-
-
-        rng_key = random.PRNGKey(0)
-
-        mcmc.run(rng_key, self.data,self.error)
-        
-        np.save('/Users/mattocallaghan/XPNorm/Data/a0_black',np.array(mcmc.get_samples()['a0']))
-
-    def run_model_single(self,i):
-
-        nuts_kernel = NUTS(self.model)
-
-        mcmc = MCMC(nuts_kernel, num_warmup=500, num_samples=500,num_chains=jax.local_device_count())
-
-
-        rng_key = random.PRNGKey(0)
-
-        mcmc.run(rng_key, self.data[i:i+1],self.error[i])
-
-        return mcmc.get_samples()['a0'][:].mean(),mcmc.get_samples()['a0'][:].std()
-
-    def run_model_single_samples(self,i):
-
-        nuts_kernel = NUTS(self.model)
-
-        mcmc = MCMC(nuts_kernel, num_warmup=100, num_samples=100,num_chains=jax.local_device_count())
-
-
-        rng_key = random.PRNGKey(0)
-
-        mcmc.run(rng_key, self.data[i:i+1],self.error[i])
-
-        return mcmc
 
     def ns_model_single(self,i):
         ns = NestedSampler(self.model)
@@ -445,84 +393,38 @@ class HMC_Sampler():
         return ns_samples
         
 
+    def priors(self,cube):
+        # the argument, cube, consists of values from 0 to 1
+        # we have to convert them to physical scales
+
+        params = cube.copy()
+        # let background level go from -10 to +10
+        hi=1.5
+        lo=0.00001
+        params[0] =  cube[0] * (hi - lo) + lo
+        # let amplitude go from 0.1 to 100
+        z = scipy.stats.norm.ppf(params[1:][None,:])
+        x=np.array(jax.vmap(self.normalising_flow.flow.bijection.transform)(jnp.array(z))+self.normalising_flow.mean)
+        params[1:]=x
+
+        return params
 
 
-    def run_svi(self):
-        guide = autoguide.AutoNormal(self.model)
-        rng_key = random.PRNGKey(0)
-        svi = SVI(
-            model=self.model, 
-            data=self.data[0:1],
-            err=self.error[0:1],
-            guide=guide, 
-            optim=optim.Adam(step_size=0.01), 
-            loss=Trace_ELBO()
-        )
-        svi_result = svi.run(
-            rng_key=rng_key, 
-            num_steps=50000
-        )
-        params = svi_result.params
-        posteriors = guide.sample_posterior(rng_key, params, sample_shape=(100000,))
-        return posteriors
-        #np.save('/Users/mattocallaghan/XPNorm/Data/a0_black',np.array(posteriors['a0']))
+    def log_likelihood(self,params):
+        data=self.data[0]
+        err=self.error[0]
+        a0=params[0:1]
+        x=params[1:][None,:]
 
-    def plot_profile(self):
-        samples=np.load('/Users/mattocallaghan/XPNorm/Data/a0_black.npy')
-        print(samples.shape)
-        mean=samples.mean(0)
-        stds=samples.std(0)
-        print(mean)
-        print(stds)
-        plt.errorbar(self.distance, mean/3.1, yerr=stds/3.1, fmt='o', markersize=3, capsize=3)
-        plt.scatter(self.distance, mean/3.1,c='r')
+        x_observed,x_std=np.array(self.extincted_phot(jnp.array(x),jnp.array(a0)))
+        x_obs = x_observed[0]
 
-        plt.xlabel('Distance Mean')
-        plt.xlim(0,2000)
-        #plt.ylim(0,0.3)
-        plt.ylabel('EBV Mean')
-        plt.title('Scatter plot with error bars')
-        plt.grid(True)
-        plt.show()
+        covariance_matrix=np.linalg.inv(err+(0.001**2)*jnp.eye(12))
+
+        l=-0.5*(np.einsum('i,ij->j',(x_obs-data),covariance_matrix)*(x_obs-data)).sum()
 
 
+        return l
 
 
-
-
-
-    def mle(self,i):
-
-        rng_key = random.PRNGKey(0)
-
-        x_original=self.dist_nf.sample(rng_key,(50000,))
-        def loss_fn(pars):
-            x_orig,a0=pars[:-1][None,:],pars[-1:][None,:]
-            extinction_vector=jnp.stack([self.extinction_coeff((x_orig+self.normalising_flow.mean)[:,-1],a0.mean(),i) for i in jnp.arange(5,-1,-1)]).T
-            extinction_vector=(jnp.einsum('ij,bj->bi',(self.normalising_flow.data_transform[1:,1:]),extinction_vector))
-
-            x=x_orig+a0*extinction_vector
-
-            
-            loss=jnp.einsum('bi,ij->bj',(x-self.data[i:i+1]),jnp.linalg.inv(self.error[i]))
-            loss=-0.5*(loss*(x-self.data[i:i+1])).sum(-1)
-            return loss[:]
-            #loss=loss
-            #loss-=jnp.linalg.det(self.error[0])**(0.5)
-            #loss-=(2*3.14)**(x.shape[-1]/2)
-        grad_loss_fn = vmap(hessian(((loss_fn))))
-        all_pars=[]
-        for a0 in np.arange(-0.0,1.0,0.01):
-            pars=jnp.concatenate((x_original,a0*jnp.ones_like(x_original[:,0])[:,None]),1)
-            all_pars.append(pars)     
-
-        pars=jnp.concatenate(all_pars,0)
-        loss=vmap(loss_fn)(pars)
-        gradient=-1*(grad_loss_fn)(pars)[:,0,:,:]
-
-        idx=np.argmax(loss)
-        print(pars[idx,-1])
-        print((np.sqrt(np.abs(np.linalg.inv(((gradient)[idx]))[-1,-1]))))
-        return pars[idx,-1],np.linalg.inv(((gradient)[idx]))[-1,-1]
-        
 
